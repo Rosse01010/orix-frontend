@@ -1,35 +1,95 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { useAuthStore } from "../store/authStore";
 
 export default function LoginPage() {
-  const login = useAuthStore((state) => state.login);
-  const [user, setUser] = useState("");
-  const [pass, setPass] = useState("");
+  const login = useAuthStore((s) => s.login);
+  const loading = useAuthStore((s) => s.loading);
+  const error = useAuthStore((s) => s.error);
+
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await login(username, password);
+    } catch {
+      // Error is already surfaced via the store; nothing else to do.
+    }
+  };
 
   return (
-    <div className="flex justify-center items-center h-screen bg-gray-100">
-      <div className="p-6 bg-white rounded shadow-md w-80">
-        <h2 className="text-xl font-bold mb-4 text-gray-800">Login</h2>
-        <input
-          className="w-full mb-2 p-2 border rounded text-gray-800"
-          placeholder="Username"
-          value={user}
-          onChange={(e) => setUser(e.target.value)}
-        />
-        <input
-          type="password"
-          className="w-full mb-4 p-2 border rounded text-gray-800"
-          placeholder="Password"
-          value={pass}
-          onChange={(e) => setPass(e.target.value)}
-        />
-        <button
-          className="w-full p-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-          onClick={() => login(user, pass)}
-        >
-          Login
+    <div className="flex min-h-full items-center justify-center px-4">
+      <form
+        onSubmit={onSubmit}
+        className="card w-full max-w-sm p-8 space-y-5"
+        aria-label="Login form"
+      >
+        <div className="space-y-1 text-center">
+          <h1 className="text-2xl font-bold tracking-tight">ORIX</h1>
+          <p className="text-xs text-zinc-400">
+            Intelligent Video Surveillance System
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label
+              htmlFor="username"
+              className="block text-xs uppercase tracking-wider text-zinc-400 mb-1"
+            >
+              Username
+            </label>
+            <input
+              id="username"
+              className="input"
+              placeholder="admin"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-xs uppercase tracking-wider text-zinc-400 mb-1"
+            >
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              className="input"
+              placeholder="••••••••"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="rounded-md bg-red-900/40 border border-red-700/60 px-3 py-2 text-sm text-red-200"
+          >
+            {error}
+          </div>
+        )}
+
+        <button type="submit" className="btn-primary w-full" disabled={loading}>
+          {loading ? "Signing in…" : "Sign in"}
         </button>
-      </div>
+
+        <div className="text-[11px] text-zinc-500 leading-relaxed border-t border-orix-border pt-3">
+          <p className="font-semibold text-zinc-400">Demo credentials:</p>
+          <p>admin / admin123</p>
+          <p>operator / operator123</p>
+          <p>user / user123</p>
+        </div>
+      </form>
     </div>
   );
 }
