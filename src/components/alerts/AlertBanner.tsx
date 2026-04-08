@@ -1,6 +1,6 @@
-import type { Alert } from "../types/Alert";
-import { cn } from "../utils/cn";
-import { formatTime } from "../utils/format";
+import type { Alert } from "../../types/Alert";
+import { cn } from "../../utils/cn";
+import { formatTime } from "../../utils/format";
 
 interface Props {
   alert: Alert;

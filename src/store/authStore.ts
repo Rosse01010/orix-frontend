@@ -2,8 +2,8 @@ import { create } from "zustand";
 import type { User, UserRole } from "../types/User";
 import {
   getStoredUser,
-  loginService,
-  logoutService,
+  login as loginSvc,
+  logout as logoutSvc,
 } from "../services/authService";
 
 interface AuthStore {
@@ -12,7 +12,7 @@ interface AuthStore {
   error: string | null;
 
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   hasRole: (...roles: UserRole[]) => boolean;
 }
 
@@ -25,7 +25,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   login: async (username, password) => {
     set({ loading: true, error: null });
     try {
-      const user = await loginService(username, password);
+      const user = await loginSvc(username, password);
       set({ user, loading: false });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Login failed";
@@ -34,8 +34,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
   },
 
-  logout: () => {
-    logoutService();
+  logout: async () => {
+    await logoutSvc();
     set({ user: null, error: null });
   },
 

@@ -1,33 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { io, Socket } from "socket.io-client";
-import type { Alert } from "../types/Alert";
+import { io } from "socket.io-client";
+import type { OrixSocket } from "../types/Socket";
 import { getStoredToken } from "./authService";
+import { envString } from "../utils/helpers";
 
-/**
- * URL of the ORIX realtime backend. Override with VITE_SOCKET_URL in your
- * .env.local to point at a different host when developing against a real
- * backend instead of the simulated one.
- */
-const SOCKET_URL: string =
-  (import.meta.env.VITE_SOCKET_URL as string | undefined) ??
-  "http://localhost:4000";
-
-/**
- * Typed event map so callers get autocomplete on emit/on.
- */
-export interface ServerToClientEvents {
-  alert: (alert: Alert) => void;
-  "camera-status": (payload: { cameraId: string; status: string }) => void;
-  connect: () => void;
-  disconnect: (reason: string) => void;
-}
-
-export interface ClientToServerEvents {
-  "face-detected": (payload: { cameraId: string; count: number }) => void;
-  "ack-alert": (payload: { alertId: string }) => void;
-}
-
-export type OrixSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+const SOCKET_URL = envString("VITE_SOCKET_URL", "http://localhost:4000");
 
 // Singleton so every hook consumer shares the same connection. Creating a
 // new socket per component would multiply traffic and race-condition events.
@@ -42,8 +19,6 @@ export function getSocket(): OrixSocket {
 
   socket = io(SOCKET_URL, {
     auth: { token: getStoredToken() },
-    // Socket.IO has built-in reconnection; we tune it to be reasonably
-    // aggressive for a control-room app where connectivity matters.
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1_000,
@@ -93,15 +68,12 @@ export function useSocket(): { socket: OrixSocket; connected: boolean } {
     s.on("connect", onConnect);
     s.on("disconnect", onDisconnect);
 
-    // If the singleton was created but never connected (e.g. lazy boot),
-    // explicitly open it here.
     if (!s.connected) s.connect();
 
     return () => {
       s.off("connect", onConnect);
       s.off("disconnect", onDisconnect);
-      // NOTE: we intentionally do NOT disconnect on unmount — the socket is
-      // a shared singleton. Call `disconnectSocket()` on logout instead.
+      // NOTE: do not disconnect on unmount — shared singleton.
     };
   }, []);
 

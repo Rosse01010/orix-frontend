@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import * as faceapi from "face-api.js";
-import { toast } from "react-toastify";
-import AlertBanner from "./AlertBanner";
-import { useSocket } from "../services/socketService";
-import type { Camera } from "../types/Camera";
-import type { Alert } from "../types/Alert";
-import { shortId } from "../utils/format";
+import AlertBanner from "../alerts/AlertBanner";
+import OverlayBoundingBox from "./OverlayBoundingBox";
+import { useSocket } from "../../services/socketService";
+import { buildLocalAlert, notifyAlert } from "../../services/alertService";
+import { useAlertStore } from "../../store/alertStore";
+import type { Camera } from "../../types/Camera";
+import type { BoundingBox } from "../../types/Socket";
 
 interface Props {
   camera: Camera;
 }
 
 /**
- * Tracks whether the face-api tiny detector has been loaded. The models
- * live in /public/models and must be downloaded separately (see README).
- * We load them once per app lifetime, not per camera.
+ * Load the tiny face detector exactly once per app lifetime. Models live
+ * in /public/models; see the README for download instructions. If the
+ * weights are missing we silently disable detection — the rest of the UI
+ * keeps working.
  */
 let modelsLoadingPromise: Promise<void> | null = null;
 function ensureModelsLoaded(): Promise<void> {
@@ -24,7 +26,7 @@ function ensureModelsLoaded(): Promise<void> {
     .catch((err) => {
       // eslint-disable-next-line no-console
       console.warn(
-        "[face-api] Could not load tinyFaceDetector from /models — face detection disabled. Download the models into public/models to enable it.",
+        "[face-api] Could not load tinyFaceDetector from /models — face detection disabled.",
         err
       );
     });
@@ -35,8 +37,13 @@ export default function CameraFeed({ camera }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { socket } = useSocket();
+  const pushAlert = useAlertStore((s) => s.push);
 
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [banners, setBanners] = useState<
+    ReturnType<typeof buildLocalAlert>[]
+  >([]);
+  const [serverBoxes, setServerBoxes] = useState<BoundingBox[]>([]);
+  const [overlaySize, setOverlaySize] = useState({ width: 0, height: 0 });
   const [videoError, setVideoError] = useState<string | null>(null);
   const [modelsReady, setModelsReady] = useState(false);
 
@@ -51,8 +58,8 @@ export default function CameraFeed({ camera }: Props) {
     };
   }, []);
 
-  // Attach the stream to the <video> element. We track load failures so the
-  // UI can surface "camera unavailable" instead of a silent black square.
+  // Attach the stream to the <video> element and surface load failures
+  // instead of showing a silent black square.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -60,34 +67,60 @@ export default function CameraFeed({ camera }: Props) {
     setVideoError(null);
     video.src = camera.streamUrl;
     const onError = () => setVideoError("Video stream unavailable");
+    const onResize = () => {
+      setOverlaySize({
+        width: video.clientWidth,
+        height: video.clientHeight,
+      });
+    };
     video.addEventListener("error", onError);
+    video.addEventListener("loadedmetadata", onResize);
     video.play().catch(() => setVideoError("Autoplay blocked"));
 
+    // Tell the backend we care about detections for this camera.
+    socket.emit("subscribe-camera", { cameraId: camera.id });
+
     return () => {
+      socket.emit("unsubscribe-camera", { cameraId: camera.id });
       video.removeEventListener("error", onError);
+      video.removeEventListener("loadedmetadata", onResize);
       video.pause();
       video.removeAttribute("src");
       video.load();
     };
-  }, [camera.streamUrl]);
+  }, [camera.id, camera.streamUrl, socket]);
 
-  // Subscribe to backend alerts for this camera so banners can show
-  // alerts emitted by the server (motion, intrusion, etc.), not only
-  // local face-detection events.
+  // Subscribe to backend-emitted alerts targeting this specific camera.
+  // The global DashboardPage also pushes alerts to the store; here we
+  // only render the transient in-frame banners.
   useEffect(() => {
-    const onAlert = (alert: Alert) => {
+    const onAlert = (alert: Parameters<typeof pushAlert>[0]) => {
       if (alert.cameraId !== camera.id) return;
-      setAlerts((prev) => [alert, ...prev].slice(0, 3));
-      toast.warn(`[${camera.name}] ${alert.message}`);
+      setBanners((prev) => [alert, ...prev].slice(0, 3));
     };
     socket.on("alert", onAlert);
     return () => {
       socket.off("alert", onAlert);
     };
-  }, [camera.id, camera.name, socket]);
+  }, [camera.id, pushAlert, socket]);
 
-  // Run face detection every second. Only active once models are ready
-  // and the video is actually playing.
+  // Subscribe to server-pushed detection bounding boxes.
+  useEffect(() => {
+    const onDetection = (payload: {
+      cameraId: string;
+      boxes: BoundingBox[];
+    }) => {
+      if (payload.cameraId !== camera.id) return;
+      setServerBoxes(payload.boxes);
+    };
+    socket.on("detection-result", onDetection);
+    return () => {
+      socket.off("detection-result", onDetection);
+    };
+  }, [camera.id, socket]);
+
+  // In-browser face detection loop (1 FPS) as a fallback when the backend
+  // does not stream detection results. Only runs once the weights loaded.
   useEffect(() => {
     if (!modelsReady || videoError) return;
 
@@ -114,18 +147,16 @@ export default function CameraFeed({ camera }: Props) {
         faceapi.draw.drawDetections(canvas, resized);
 
         if (detections.length > 0) {
-          const msg = `${detections.length} face(s) detected`;
-          const alert: Alert = {
-            id: shortId(),
+          const alert = buildLocalAlert({
             cameraId: camera.id,
             type: "face-detected",
             level: "info",
-            message: msg,
-            timestamp: new Date().toISOString(),
+            message: `${detections.length} face(s) detected`,
             meta: { count: detections.length },
-          };
-          setAlerts((prev) => [alert, ...prev].slice(0, 3));
-          toast.info(`[${camera.name}] ${msg}`);
+          });
+          setBanners((prev) => [alert, ...prev].slice(0, 3));
+          pushAlert(alert);
+          notifyAlert(alert, camera.name);
           socket.emit("face-detected", {
             cameraId: camera.id,
             count: detections.length,
@@ -138,7 +169,7 @@ export default function CameraFeed({ camera }: Props) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [camera.id, camera.name, modelsReady, videoError, socket]);
+  }, [camera.id, camera.name, modelsReady, videoError, socket, pushAlert]);
 
   return (
     <div className="card relative overflow-hidden flex flex-col">
@@ -170,10 +201,19 @@ export default function CameraFeed({ camera }: Props) {
           playsInline
           autoPlay
         />
+        {/* local face-api overlay */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full pointer-events-none"
         />
+        {/* server-pushed detections overlay */}
+        {overlaySize.width > 0 && serverBoxes.length > 0 && (
+          <OverlayBoundingBox
+            boxes={serverBoxes}
+            width={overlaySize.width}
+            height={overlaySize.height}
+          />
+        )}
 
         {videoError && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-3">
@@ -189,7 +229,7 @@ export default function CameraFeed({ camera }: Props) {
         )}
 
         <div className="absolute bottom-1.5 sm:bottom-2 left-1.5 right-1.5 sm:left-2 sm:right-2 flex flex-col gap-1 pointer-events-none">
-          {alerts.map((a) => (
+          {banners.map((a) => (
             <AlertBanner key={a.id} alert={a} />
           ))}
         </div>

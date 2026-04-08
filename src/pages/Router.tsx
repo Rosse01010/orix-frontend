@@ -1,9 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import type { ReactNode } from "react";
 import LoginPage from "./LoginPage";
 import DashboardPage from "./DashboardPage";
+import UserManagementPage from "./UserManagementPage";
+import AuthLayout from "../layouts/AuthLayout";
+import DashboardLayout from "../layouts/DashboardLayout";
 import { useAuthStore } from "../store/authStore";
 import type { UserRole } from "../types/User";
-import type { ReactNode } from "react";
 
 /**
  * Guards a route by requiring an authenticated user, optionally restricted
@@ -18,7 +21,6 @@ function ProtectedRoute({
   roles?: UserRole[];
 }) {
   const user = useAuthStore((s) => s.user);
-
   if (!user) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
@@ -34,13 +36,33 @@ export default function RouterProvider() {
       <Routes>
         <Route
           path="/login"
-          element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+          element={
+            user ? (
+              <Navigate to="/dashboard" replace />
+            ) : (
+              <AuthLayout>
+                <LoginPage />
+              </AuthLayout>
+            )
+          }
         />
         <Route
           path="/dashboard"
           element={
             <ProtectedRoute>
-              <DashboardPage />
+              <DashboardLayout>
+                <DashboardPage />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/users"
+          element={
+            <ProtectedRoute roles={["admin"]}>
+              <DashboardLayout>
+                <UserManagementPage />
+              </DashboardLayout>
             </ProtectedRoute>
           }
         />
