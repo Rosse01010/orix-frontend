@@ -142,13 +142,17 @@ export default function CameraFeed({ camera }: Props) {
 
   return (
     <div className="card relative overflow-hidden flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-orix-border bg-orix-bg/50">
-        <div>
-          <p className="text-sm font-medium">{camera.name}</p>
-          <p className="text-[11px] text-zinc-500">{camera.location}</p>
+      <div className="flex items-center justify-between gap-2 px-2 sm:px-3 py-1.5 sm:py-2 border-b border-orix-border bg-orix-bg/50">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs sm:text-sm font-medium truncate">
+            {camera.name}
+          </p>
+          <p className="text-[10px] sm:text-[11px] text-zinc-500 truncate">
+            {camera.location}
+          </p>
         </div>
         <span
-          className={`text-[10px] uppercase px-2 py-0.5 rounded ${
+          className={`text-[9px] sm:text-[10px] uppercase px-1.5 sm:px-2 py-0.5 rounded shrink-0 ${
             videoError
               ? "bg-red-900/60 text-red-200"
               : "bg-green-900/60 text-green-200"
@@ -158,7 +162,7 @@ export default function CameraFeed({ camera }: Props) {
         </span>
       </div>
 
-      <div className="relative flex-1 bg-black min-h-[240px]">
+      <div className="relative flex-1 bg-black aspect-video sm:aspect-auto sm:min-h-[200px] md:min-h-[240px]">
         <video
           ref={videoRef}
           className="w-full h-full object-cover"
@@ -172,17 +176,19 @@ export default function CameraFeed({ camera }: Props) {
         />
 
         {videoError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-3">
             <div className="text-center">
-              <p className="text-red-400 font-semibold text-sm">
+              <p className="text-red-400 font-semibold text-xs sm:text-sm">
                 {videoError}
               </p>
-              <p className="text-xs text-zinc-500 mt-1">{camera.streamUrl}</p>
+              <p className="text-[10px] sm:text-xs text-zinc-500 mt-1 break-all">
+                {camera.streamUrl}
+              </p>
             </div>
           </div>
         )}
 
-        <div className="absolute bottom-2 left-2 right-2 flex flex-col gap-1 pointer-events-none">
+        <div className="absolute bottom-1.5 sm:bottom-2 left-1.5 right-1.5 sm:left-2 sm:right-2 flex flex-col gap-1 pointer-events-none">
           {alerts.map((a) => (
             <AlertBanner key={a.id} alert={a} />
           ))}

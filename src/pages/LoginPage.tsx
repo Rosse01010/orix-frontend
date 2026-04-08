@@ -19,14 +19,16 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-full items-center justify-center px-4">
+    <div className="flex min-h-full items-center justify-center px-4 py-6 sm:py-12">
       <form
         onSubmit={onSubmit}
-        className="card w-full max-w-sm p-8 space-y-5"
+        className="card w-full max-w-sm p-6 sm:p-8 space-y-4 sm:space-y-5"
         aria-label="Login form"
       >
         <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-bold tracking-tight">ORIX</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+            ORIX
+          </h1>
           <p className="text-xs text-zinc-400">
             Intelligent Video Surveillance System
           </p>

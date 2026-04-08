@@ -39,7 +39,7 @@ const CAMERAS: Camera[] = [
 
 export default function CameraGrid() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 auto-rows-fr">
+    <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-2 sm:gap-3 lg:gap-4 auto-rows-fr">
       {CAMERAS.map((cam) => (
         <CameraFeed key={cam.id} camera={cam} />
       ))}
