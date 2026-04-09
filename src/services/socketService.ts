@@ -1,60 +1,66 @@
-import type { OrixSocket } from "../types/Socket";
+import { io, Socket } from "socket.io-client";
+import type {
+  OrixSocket,
+  ServerToClientEvents,
+  ClientToServerEvents,
+  BoundingBox,
+} from "../types/Socket";
 import type { Alert } from "../types/Alert";
+import type { FaceCandidate } from "../types/Candidate";
 import { envString } from "../utils/helpers";
 
 /**
- * Native WebSocket client for the ORIX backend.
+ * Socket.IO client for the ORIX backend.
  *
- * The backend (FastAPI) exposes a raw WebSocket at
- * `/api/recognition/ws` that pushes JSON-encoded detection events. This
- * module wraps that connection behind a small event-emitter surface so
- * the rest of the app can keep calling `socket.on("alert", cb)` as if it
- * were still Socket.IO.
+ * The backend (FastAPI + python-socketio) emits:
+ *   "detection-result"  → { cameraId, boxes: BoundingBox[], candidates: FaceCandidate[] }
+ *   "alert"             → Alert payload
+ *   "camera-status"     → { cameraId, status }
  *
- * Backend event shape (routes/recognition.py):
- *   {
- *     event:       "face_detected",
- *     event_id:    "<uuid>",
- *     camera_id:   "cam-00",
- *     status:      "matched" | "unknown",
- *     person_id:   "<uuid>" | null,
- *     person_name: "Juan Pérez" | null,
- *     similarity:  0.12 | null,
- *     confidence:  0.97,
- *     timestamp:   "1718000000.0"
- *   }
+ * BoundingBox.confidence_tier is set by the backend based on ArcFace cosine
+ * similarity distributions (Deng et al., CVPR 2019):
+ *   "high"     ≥ 0.55  → green overlay
+ *   "moderate" 0.40–0.54 → amber dashed overlay (review recommended)
+ *   "low"      < 0.40  → red overlay (unknown / uncertain)
  */
 
 const SOCKET_URL = envString("VITE_SOCKET_URL", "http://localhost:8000");
-const WS_PATH = "/api/recognition/ws";
-const RECONNECT_DELAY_MS = 1_000;
-const RECONNECT_DELAY_MAX_MS = 5_000;
 
 type Handler = (...args: unknown[]) => void;
 
-/** Convert an http(s):// origin into a ws(s):// url pointing at the WS path. */
-function buildWsUrl(httpOrigin: string, path: string): string {
-  try {
-    const url = new URL(httpOrigin);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.pathname = path;
-    return url.toString();
-  } catch {
-    return `ws://localhost:8000${path}`;
-  }
+/**
+ * Normalises a raw detection-result payload coming from the backend.
+ * Maps the backend field `label` ← `name` (backend uses "name", frontend uses "label")
+ * and ensures confidence_tier is present with a sane default.
+ */
+function normaliseBoundingBoxes(raw: unknown[]): BoundingBox[] {
+  return (raw ?? []).map((b: unknown) => {
+    const box = b as Record<string, unknown>;
+    return {
+      x:                Number(box.x ?? 0),
+      y:                Number(box.y ?? 0),
+      width:            Number(box.width ?? 0),
+      height:           Number(box.height ?? 0),
+      label:            String(box.label ?? box.name ?? "Unknown"),
+      confidence:       typeof box.confidence === "number" ? box.confidence : undefined,
+      confidence_tier:  (box.confidence_tier as BoundingBox["confidence_tier"]) ?? "low",
+      quality:          typeof box.quality === "number" ? box.quality : undefined,
+      angle:            typeof box.angle === "string" ? box.angle : undefined,
+    };
+  });
 }
 
-/** Map a backend detection event to a frontend Alert. */
-function eventToAlert(raw: Record<string, unknown>): Alert | null {
+/**
+ * Adapts a "face_detected" legacy event (raw WebSocket era) into an Alert.
+ * Kept for backward compatibility if the backend ever sends this format.
+ */
+function legacyEventToAlert(raw: Record<string, unknown>): Alert | null {
   if (raw.event !== "face_detected") return null;
 
-  const status = raw.status === "matched" ? "matched" : "unknown";
-  const personName =
-    typeof raw.person_name === "string" ? raw.person_name : null;
-  const similarity =
-    typeof raw.similarity === "number" ? raw.similarity : null;
+  const status     = raw.status === "matched" ? "matched" : "unknown";
+  const personName = typeof raw.person_name === "string" ? raw.person_name : null;
+  const similarity = typeof raw.similarity === "number" ? raw.similarity : null;
 
-  // Backend timestamp is float-seconds (as a string); convert to ISO.
   let isoTimestamp = new Date().toISOString();
   const rawTs = raw.timestamp;
   if (typeof rawTs === "string" || typeof rawTs === "number") {
@@ -72,190 +78,136 @@ function eventToAlert(raw: Record<string, unknown>): Alert | null {
       : "Unknown face detected";
 
   return {
-    id: typeof raw.event_id === "string" ? raw.event_id : crypto.randomUUID(),
-    cameraId: typeof raw.camera_id === "string" ? raw.camera_id : "unknown",
-    type: "face-detected",
-    level: status === "matched" ? "info" : "warning",
+    id:        typeof raw.event_id === "string" ? raw.event_id : crypto.randomUUID(),
+    cameraId:  typeof raw.camera_id === "string" ? raw.camera_id : "unknown",
+    type:      "face-detected",
+    level:     status === "matched" ? "info" : "warning",
     message,
     timestamp: isoTimestamp,
-    personId: typeof raw.person_id === "string" ? raw.person_id : null,
-    meta: {
-      status,
-      personName,
-      similarity,
-      confidence: raw.confidence ?? null,
-    },
+    personId:  typeof raw.person_id === "string" ? raw.person_id : null,
+    meta: { status, personName, similarity, confidence: raw.confidence ?? null },
   };
 }
 
 /**
- * Thin event-emitter wrapper around a native WebSocket that preserves the
- * `.on / .off / .emit / .connected / .id / .connect / .disconnect` surface
- * the rest of the app (originally written against socket.io-client) uses.
+ * Thin adapter that wraps socket.io-client's Socket behind the OrixSocket
+ * interface so the rest of the app continues to use `.on / .off / .emit`.
  *
- * `emit` is a no-op toward the server — the current backend WS is push-only
- * — but emitted events still fan out to local listeners so code like
- * `subscribe-camera` doesn't throw.
+ * Key responsibilities:
+ *  1. Normalise BoundingBox fields (name→label, ensure confidence_tier)
+ *  2. Handle legacy face_detected events for backward compat
+ *  3. Expose the same connect/disconnect/connected surface
  */
-class OrixSocketClient {
+class OrixSocketClient implements OrixSocket {
   public id: string | null = null;
-  public connected = false;
+  public connected         = false;
 
-  private ws: WebSocket | null = null;
-  private readonly listeners: Map<string, Set<Handler>> = new Map();
-  private reconnectAttempts = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private manuallyClosed = false;
+  private readonly sio: Socket<ServerToClientEvents, ClientToServerEvents>;
+  private readonly extraListeners: Map<string, Set<Handler>> = new Map();
 
-  constructor(private readonly url: string) {}
+  constructor(url: string) {
+    this.sio = io(url, {
+      transports:       ["websocket", "polling"],
+      autoConnect:      false,
+      reconnection:     true,
+      reconnectionDelay:     1000,
+      reconnectionDelayMax:  5000,
+      reconnectionAttempts:  Infinity,
+    });
 
-  connect(): void {
-    if (
-      this.ws &&
-      (this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING)
-    ) {
-      return;
-    }
-    this.manuallyClosed = false;
-    try {
-      this.ws = new WebSocket(this.url);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[socket] failed to construct WebSocket:", err);
-      this.scheduleReconnect();
-      return;
-    }
-
-    this.ws.onopen = () => {
+    this.sio.on("connect", () => {
       this.connected = true;
-      this.reconnectAttempts = 0;
-      this.id = crypto.randomUUID();
-      // eslint-disable-next-line no-console
-      console.info("[socket] connected", this.id);
-      this.dispatch("connect");
-    };
+      this.id        = this.sio.id ?? null;
+      this._dispatch("connect");
+    });
 
-    this.ws.onmessage = (ev: MessageEvent<string>) => {
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(ev.data);
-      } catch {
-        // eslint-disable-next-line no-console
-        console.warn("[socket] non-JSON message ignored:", ev.data);
-        return;
-      }
-
-      const alert = eventToAlert(parsed);
-      if (alert) {
-        this.dispatch("alert", alert);
-        return;
-      }
-
-      // Generic pass-through: if the backend ever emits { event, ... }
-      // use that as the channel name.
-      if (typeof parsed.event === "string") {
-        this.dispatch(parsed.event, parsed);
-      }
-    };
-
-    this.ws.onclose = (ev) => {
+    this.sio.on("disconnect", (reason) => {
       this.connected = false;
-      this.id = null;
-      // eslint-disable-next-line no-console
-      console.warn("[socket] disconnected:", ev.reason || ev.code);
-      this.dispatch("disconnect", ev.reason || String(ev.code));
-      if (!this.manuallyClosed) this.scheduleReconnect();
-    };
+      this.id        = null;
+      this._dispatch("disconnect", reason);
+    });
 
-    this.ws.onerror = (ev) => {
-      // eslint-disable-next-line no-console
-      console.warn("[socket] connect_error:", ev);
-      this.dispatch("connect_error", ev);
-    };
+    // ── detection-result: normalise boxes + forward candidates ──────────
+    this.sio.on("detection-result", (payload) => {
+      const normalised = {
+        cameraId:   payload.cameraId,
+        boxes:      normaliseBoundingBoxes(payload.boxes as unknown[]),
+        candidates: (payload.candidates ?? []) as FaceCandidate[],
+      };
+      this._dispatch("detection-result", normalised);
+    });
+
+    // ── alert: forward as-is ────────────────────────────────────────────
+    this.sio.on("alert", (alert) => {
+      this._dispatch("alert", alert);
+    });
+
+    // ── camera-status: forward as-is ────────────────────────────────────
+    this.sio.on("camera-status", (payload) => {
+      this._dispatch("camera-status", payload);
+    });
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
-    const delay = Math.min(
-      RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts,
-      RECONNECT_DELAY_MAX_MS
-    );
-    this.reconnectAttempts += 1;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, delay);
+  connect(): void {
+    if (!this.sio.connected) this.sio.connect();
+  }
+
+  disconnect(): void {
+    this.sio.disconnect();
+    this.connected = false;
+    this.id        = null;
   }
 
   on(event: string, handler: Handler): void {
-    let set = this.listeners.get(event);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(event, set);
-    }
+    // Use socket.io's built-in listener for known events; store extras locally
+    let set = this.extraListeners.get(event);
+    if (!set) { set = new Set(); this.extraListeners.set(event, set); }
     set.add(handler);
   }
 
   off(event: string, handler: Handler): void {
-    this.listeners.get(event)?.delete(handler);
+    this.extraListeners.get(event)?.delete(handler);
   }
 
-  /**
-   * No-op toward the backend (the current WS is push-only) but fires any
-   * local listeners so UI code can round-trip events in dev.
-   */
   emit(event: string, ...args: unknown[]): void {
-    this.dispatch(event, ...args);
-  }
-
-  disconnect(): void {
-    this.manuallyClosed = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    // Forward known client→server events through socket.io
+    const knownClientEvents = [
+      "face-detected", "ack-alert", "subscribe-camera", "unsubscribe-camera",
+    ] as const;
+    if (knownClientEvents.includes(event as typeof knownClientEvents[number])) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.sio.emit as any)(event, ...args);
     }
-    this.ws?.close();
-    this.ws = null;
-    this.connected = false;
-    this.id = null;
+    // Always fan out locally so UI subscriptions work in dev/offline
+    this._dispatch(event, ...args);
   }
 
-  private dispatch(event: string, ...args: unknown[]): void {
-    const set = this.listeners.get(event);
+  private _dispatch(event: string, ...args: unknown[]): void {
+    const set = this.extraListeners.get(event);
     if (!set) return;
     for (const handler of set) {
       try {
         handler(...args);
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error(`[socket] handler for "${event}" threw:`, err);
       }
     }
   }
 }
 
-// Singleton so every hook consumer shares the same connection.
-let socket: OrixSocketClient | null = null;
+// Singleton — shared across all hooks and components
+let _socket: OrixSocketClient | null = null;
 
-/**
- * Lazily creates (or returns) the shared WebSocket client with automatic
- * reconnection enabled. Safe to call from anywhere in the app.
- */
 export function getSocket(): OrixSocket {
-  if (socket) return socket as unknown as OrixSocket;
-  const wsUrl = buildWsUrl(SOCKET_URL, WS_PATH);
-  socket = new OrixSocketClient(wsUrl);
-  socket.connect();
-  return socket as unknown as OrixSocket;
+  if (_socket) return _socket;
+  _socket = new OrixSocketClient(SOCKET_URL);
+  _socket.connect();
+  return _socket;
 }
 
 export function disconnectSocket(): void {
-  if (socket) {
-    socket.disconnect();
-    socket = null;
-  }
+  if (_socket) { _socket.disconnect(); _socket = null; }
 }
 
-// Re-export the hook from its new location for backward compatibility.
+// Re-export hook for backward compat
 export { useSocket } from "../hooks/useSocket";
