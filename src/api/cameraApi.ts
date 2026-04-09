@@ -1,91 +1,78 @@
-import axios, { AxiosError } from "axios";
 import type { Camera } from "../types/Camera";
-import { envString, sleep } from "../utils/helpers";
-
-const API_BASE = envString("VITE_API_URL", "http://localhost:4000");
+import { sleep } from "../utils/helpers";
 
 /**
- * Mock camera list used when the backend is unreachable. Mirrors the real
- * GET /cameras response so swapping in a live server requires no UI change.
+ * Local-only camera registry.
+ *
+ * The ORIX backend does not currently expose a `/cameras` endpoint —
+ * cameras are implicit (identified by `camera_id` in detection events).
+ * Until the backend grows one we keep a static list here so the UI's
+ * grid, routing and alert-to-camera name mapping keep working.
+ *
+ * Stream URLs use placeholder mp4s so the <video> element has something
+ * to attach to; replace them with real RTSP/HLS proxy URLs when the
+ * backend starts serving media.
  */
 const MOCK_CAMERAS: Camera[] = [
   {
-    id: "cam1",
+    id: "cam-00",
     name: "Main Entrance",
     location: "Lobby",
-    streamUrl: `${API_BASE}/stream/cam1`,
+    streamUrl:
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
     status: "online",
   },
   {
-    id: "cam2",
+    id: "cam-01",
     name: "Parking Lot",
     location: "Exterior — North",
-    streamUrl: `${API_BASE}/stream/cam2`,
+    streamUrl:
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
     status: "online",
   },
   {
-    id: "cam3",
+    id: "cam-02",
     name: "Warehouse",
     location: "Building B",
-    streamUrl: `${API_BASE}/stream/cam3`,
+    streamUrl:
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
     status: "online",
   },
   {
-    id: "cam4",
+    id: "cam-03",
     name: "Server Room",
     location: "Floor 2",
-    streamUrl: `${API_BASE}/stream/cam4`,
+    streamUrl:
+      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
     status: "online",
   },
 ];
 
-function authHeaders(token: string | null): Record<string, string> {
-  return token ? { Authorization: `Bearer ${token}` } : {};
+/** GET all cameras the user can see. */
+export async function fetchCameras(_token: string | null): Promise<Camera[]> {
+  void _token;
+  await sleep(150);
+  return [...MOCK_CAMERAS];
 }
 
-/** GET /cameras — all cameras the user can see. */
-export async function fetchCameras(token: string | null): Promise<Camera[]> {
-  try {
-    const { data } = await axios.get<Camera[]>(`${API_BASE}/cameras`, {
-      headers: authHeaders(token),
-      timeout: 5000,
-    });
-    return data;
-  } catch (err) {
-    if (err instanceof AxiosError) {
-      await sleep(200);
-      return MOCK_CAMERAS;
-    }
-    throw err;
-  }
-}
-
-/** GET /cameras/:id */
+/** GET a single camera by id. */
 export async function fetchCameraById(
   id: string,
-  token: string | null
+  _token: string | null
 ): Promise<Camera | null> {
-  try {
-    const { data } = await axios.get<Camera>(`${API_BASE}/cameras/${id}`, {
-      headers: authHeaders(token),
-      timeout: 5000,
-    });
-    return data;
-  } catch {
-    return MOCK_CAMERAS.find((c) => c.id === id) ?? null;
-  }
+  void _token;
+  return MOCK_CAMERAS.find((c) => c.id === id) ?? null;
 }
 
-/** PATCH /cameras/:id — update (admin only). */
+/** PATCH — updates a single camera in-memory (no persistence). */
 export async function updateCamera(
   id: string,
   patch: Partial<Camera>,
-  token: string | null
+  _token: string | null
 ): Promise<Camera> {
-  const { data } = await axios.patch<Camera>(
-    `${API_BASE}/cameras/${id}`,
-    patch,
-    { headers: authHeaders(token), timeout: 5000 }
-  );
-  return data;
+  void _token;
+  const idx = MOCK_CAMERAS.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Camera ${id} not found`);
+  MOCK_CAMERAS[idx] = { ...MOCK_CAMERAS[idx], ...patch };
+  return MOCK_CAMERAS[idx];
 }

@@ -1,10 +1,15 @@
-import type { Socket } from "socket.io-client";
 import type { Alert } from "./Alert";
 import type { CameraStatus } from "./Camera";
 import type { FaceCandidate } from "./Candidate";
 
 /**
  * Events the ORIX backend pushes to the client.
+ *
+ * NOTE: the current backend (FastAPI native WebSocket) only pushes
+ * `face_detected` payloads, which the socket service translates into
+ * `alert` events. The other channels are kept here for forward
+ * compatibility and for code that still emits them (e.g. in-browser
+ * face detection in CameraFeed).
  */
 export interface ServerToClientEvents {
   alert: (alert: Alert) => void;
@@ -20,7 +25,8 @@ export interface ServerToClientEvents {
 }
 
 /**
- * Events the client emits to the backend.
+ * Events the client "emits". Since the backend WebSocket is push-only,
+ * these are local-only (see socketService.ts `emit`).
  */
 export interface ClientToServerEvents {
   "face-detected": (payload: { cameraId: string; count: number }) => void;
@@ -43,4 +49,29 @@ export interface BoundingBox {
   angle?: string;
 }
 
-export type OrixSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+/**
+ * Minimal socket-ish interface the rest of the app relies on. The concrete
+ * implementation lives in `services/socketService.ts` and wraps a native
+ * `WebSocket`, but consumers only see this event-emitter surface.
+ */
+export interface OrixSocket {
+  id: string | null;
+  connected: boolean;
+  connect(): void;
+  disconnect(): void;
+  on<E extends keyof ServerToClientEvents>(
+    event: E,
+    handler: ServerToClientEvents[E]
+  ): void;
+  on(event: string, handler: (...args: unknown[]) => void): void;
+  off<E extends keyof ServerToClientEvents>(
+    event: E,
+    handler: ServerToClientEvents[E]
+  ): void;
+  off(event: string, handler: (...args: unknown[]) => void): void;
+  emit<E extends keyof ClientToServerEvents>(
+    event: E,
+    ...args: Parameters<ClientToServerEvents[E]>
+  ): void;
+  emit(event: string, ...args: unknown[]): void;
+}

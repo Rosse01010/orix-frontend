@@ -7,14 +7,10 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      // Proxy REST calls so browser avoids CORS during local dev
-      "/auth": { target: "http://localhost:8000", changeOrigin: true },
-      "/cameras": { target: "http://localhost:8000", changeOrigin: true },
-      "/users": { target: "http://localhost:8000", changeOrigin: true },
-      "/api": { target: "http://localhost:8000", changeOrigin: true },
-      "/health": { target: "http://localhost:8000", changeOrigin: true },
-      // Socket.IO transport
-      "/socket.io": {
+      // The ORIX backend only exposes /api/recognition/* (REST + WS).
+      // `ws: true` upgrades `/api/recognition/ws` to a WebSocket tunnel
+      // so the frontend can hit /api/... same-origin during dev.
+      "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
         ws: true,
