@@ -28,17 +28,29 @@ export interface DetectionEvent {
   person_name: string | null;
 }
 
-export interface PersonCreatePayload {
+/**
+ * Consented social-profile links stored alongside a person's face
+ * embedding. These are *provided by the person at enrollment time*, not
+ * discovered automatically from the face.
+ */
+export interface SocialLinks {
+  linkedin_url?: string | null;
+  instagram_handle?: string | null;
+  twitter_handle?: string | null;
+  notes?: string | null;
+}
+
+export interface PersonCreatePayload extends SocialLinks {
   name: string;
   embedding: number[];
 }
 
-export interface PersonCreateResponse {
+export interface PersonCreateResponse extends SocialLinks {
   person_id: string;
   name: string;
 }
 
-export interface PersonDetails {
+export interface PersonDetails extends SocialLinks {
   id: string;
   name: string;
   created_at: string;

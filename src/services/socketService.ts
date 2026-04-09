@@ -79,9 +79,9 @@ function eventToAlert(raw: Record<string, unknown>): Alert | null {
     level: status === "matched" ? "info" : "warning",
     message,
     timestamp: isoTimestamp,
+    personId: typeof raw.person_id === "string" ? raw.person_id : null,
     meta: {
       status,
-      personId: raw.person_id ?? null,
       personName,
       similarity,
       confidence: raw.confidence ?? null,

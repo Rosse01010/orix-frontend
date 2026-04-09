@@ -16,10 +16,12 @@ import { sleep } from "../utils/helpers";
 const MOCK_CAMERAS: Camera[] = [
   {
     id: "cam-00",
-    name: "Main Entrance",
-    location: "Lobby",
-    streamUrl:
-      "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4",
+    name: "Local Webcam",
+    location: "This device",
+    // `webcam://` is a custom scheme handled in CameraFeed.tsx — it
+    // triggers navigator.mediaDevices.getUserMedia() instead of loading
+    // a remote video URL. Handy for testing face-api.js detection.
+    streamUrl: "webcam://default",
     status: "online",
   },
   {

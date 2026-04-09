@@ -59,13 +59,17 @@ export default function CameraFeed({ camera }: Props) {
   }, []);
 
   // Attach the stream to the <video> element and surface load failures
-  // instead of showing a silent black square.
+  // instead of showing a silent black square. Two sources are supported:
+  //   - `webcam://` → local device camera via getUserMedia
+  //   - anything else → treated as an http(s) video URL
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     setVideoError(null);
-    video.src = camera.streamUrl;
+    let mediaStream: MediaStream | null = null;
+    let cancelled = false;
+
     const onError = () => setVideoError("Video stream unavailable");
     const onResize = () => {
       setOverlaySize({
@@ -75,18 +79,49 @@ export default function CameraFeed({ camera }: Props) {
     };
     video.addEventListener("error", onError);
     video.addEventListener("loadedmetadata", onResize);
-    video.play().catch(() => setVideoError("Autoplay blocked"));
+
+    if (camera.streamUrl.startsWith("webcam://")) {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setVideoError("getUserMedia not supported");
+      } else {
+        navigator.mediaDevices
+          .getUserMedia({ video: true, audio: false })
+          .then((stream) => {
+            if (cancelled) {
+              stream.getTracks().forEach((t) => t.stop());
+              return;
+            }
+            mediaStream = stream;
+            video.srcObject = stream;
+            video.play().catch(() => setVideoError("Autoplay blocked"));
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn("[webcam] getUserMedia failed:", err);
+            setVideoError("Webcam permission denied");
+          });
+      }
+    } else {
+      video.src = camera.streamUrl;
+      video.play().catch(() => setVideoError("Autoplay blocked"));
+    }
 
     // Tell the backend we care about detections for this camera.
     socket.emit("subscribe-camera", { cameraId: camera.id });
 
     return () => {
+      cancelled = true;
       socket.emit("unsubscribe-camera", { cameraId: camera.id });
       video.removeEventListener("error", onError);
       video.removeEventListener("loadedmetadata", onResize);
       video.pause();
-      video.removeAttribute("src");
-      video.load();
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((t) => t.stop());
+        video.srcObject = null;
+      } else {
+        video.removeAttribute("src");
+        video.load();
+      }
     };
   }, [camera.id, camera.streamUrl, socket]);
 
@@ -120,9 +155,13 @@ export default function CameraFeed({ camera }: Props) {
   }, [camera.id, socket]);
 
   // In-browser face detection loop (1 FPS) as a fallback when the backend
-  // does not stream detection results. Only runs once the weights loaded.
+  // does not stream detection results. Only runs once the weights loaded
+  // AND when the source is the local webcam — face-api.js can't read
+  // pixels from cross-origin <video> elements (tainted canvas), so for
+  // remote streams we rely entirely on the backend's detection pipeline.
+  const isLocalWebcam = camera.streamUrl.startsWith("webcam://");
   useEffect(() => {
-    if (!modelsReady || videoError) return;
+    if (!modelsReady || videoError || !isLocalWebcam) return;
 
     const interval = setInterval(async () => {
       const video = videoRef.current;

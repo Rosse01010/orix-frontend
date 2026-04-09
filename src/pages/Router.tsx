@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import LoginPage from "./LoginPage";
 import DashboardPage from "./DashboardPage";
 import UserManagementPage from "./UserManagementPage";
+import EnrollPersonPage from "./EnrollPersonPage";
 import AuthLayout from "../layouts/AuthLayout";
 import DashboardLayout from "../layouts/DashboardLayout";
 import { useAuthStore } from "../store/authStore";
@@ -62,6 +63,16 @@ export default function RouterProvider() {
             <ProtectedRoute roles={["admin"]}>
               <DashboardLayout>
                 <UserManagementPage />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/enroll"
+          element={
+            <ProtectedRoute roles={["admin", "operator"]}>
+              <DashboardLayout>
+                <EnrollPersonPage />
               </DashboardLayout>
             </ProtectedRoute>
           }
