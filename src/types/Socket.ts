@@ -1,6 +1,7 @@
 import type { Socket } from "socket.io-client";
 import type { Alert } from "./Alert";
 import type { CameraStatus } from "./Camera";
+import type { FaceCandidate } from "./Candidate";
 
 /**
  * Events the ORIX backend pushes to the client.
@@ -11,6 +12,8 @@ export interface ServerToClientEvents {
   "detection-result": (payload: {
     cameraId: string;
     boxes: BoundingBox[];
+    /** Faces that need operator confirmation (off-angle or unknown) */
+    candidates: FaceCandidate[];
   }) => void;
   connect: () => void;
   disconnect: (reason: string) => void;
@@ -27,9 +30,7 @@ export interface ClientToServerEvents {
 }
 
 /**
- * Normalized bounding box shape used for overlays. Coordinates are in the
- * display (CSS) pixel space of the <video> element so the canvas can render
- * them directly.
+ * Normalized bounding box shape used for overlays.
  */
 export interface BoundingBox {
   x: number;
@@ -38,6 +39,8 @@ export interface BoundingBox {
   height: number;
   label?: string;
   confidence?: number;
+  quality?: number;
+  angle?: string;
 }
 
 export type OrixSocket = Socket<ServerToClientEvents, ClientToServerEvents>;

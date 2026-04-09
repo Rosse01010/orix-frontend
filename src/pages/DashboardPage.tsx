@@ -1,31 +1,33 @@
 import { useEffect } from "react";
 import CameraGrid from "../components/cameras/CameraGrid";
+import SimilarityPanel from "../components/similarity/SimilarityPanel";
 import { useSocket } from "../services/socketService";
 import { useAlertStore } from "../store/alertStore";
 import { useCameraStore } from "../store/cameraStore";
+import { useCandidateStore } from "../store/candidateStore";
 import { formatTime } from "../utils/format";
 import { notifyAlert } from "../services/alertService";
+import type { FaceCandidate } from "../types/Candidate";
 
-/**
- * Main dashboard. Loads the camera list on mount, wires a global alert
- * subscription, and renders the grid + recent alerts side panel.
- */
 export default function DashboardPage() {
   const { socket } = useSocket();
 
-  const cameras = useCameraStore((s) => s.cameras);
-  const fetchCameras = useCameraStore((s) => s.fetchAll);
+  const cameras         = useCameraStore((s) => s.cameras);
+  const fetchCameras    = useCameraStore((s) => s.fetchAll);
+  const setCameraStatus = useCameraStore((s) => s.setStatus);
 
-  const alerts = useAlertStore((s) => s.alerts);
+  const alerts    = useAlertStore((s) => s.alerts);
   const pushAlert = useAlertStore((s) => s.push);
 
-  // Initial data load.
+  const addCandidates  = useCandidateStore((s) => s.addCandidates);
+  const pendingCount   = useCandidateStore((s) => s.pending.length);
+
+  // Load cameras on mount
   useEffect(() => {
     fetchCameras();
   }, [fetchCameras]);
 
-  // Subscribe once, centrally, to every backend alert and push into the
-  // store. Individual CameraFeeds only render what's relevant to them.
+  // Global alert subscription
   useEffect(() => {
     const onAlert = (alert: Parameters<typeof pushAlert>[0]) => {
       pushAlert(alert);
@@ -33,53 +35,89 @@ export default function DashboardPage() {
       notifyAlert(alert, cam?.name);
     };
     socket.on("alert", onAlert);
-    return () => {
-      socket.off("alert", onAlert);
-    };
+    return () => { socket.off("alert", onAlert); };
   }, [socket, pushAlert, cameras]);
 
-  // Keep the camera-status store in sync with server-pushed events.
-  const setCameraStatus = useCameraStore((s) => s.setStatus);
+  // Camera status updates
   useEffect(() => {
     const onStatus = (payload: { cameraId: string; status: string }) => {
-      setCameraStatus(
-        payload.cameraId,
-        payload.status as Parameters<typeof setCameraStatus>[1]
-      );
+      setCameraStatus(payload.cameraId, payload.status as Parameters<typeof setCameraStatus>[1]);
     };
     socket.on("camera-status", onStatus);
-    return () => {
-      socket.off("camera-status", onStatus);
-    };
+    return () => { socket.off("camera-status", onStatus); };
   }, [socket, setCameraStatus]);
 
-  return (
-    <div className="h-full grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-3 sm:gap-4">
-      <CameraGrid />
+  // ── Similarity panel: collect candidates from every detection event ────────
+  useEffect(() => {
+    const onDetection = (payload: {
+      cameraId: string;
+      boxes: unknown[];
+      candidates: FaceCandidate[];
+    }) => {
+      if (!payload.candidates || payload.candidates.length === 0) return;
 
-      <aside className="card p-3 sm:p-4 flex flex-col min-h-0 max-h-[40vh] xl:max-h-none">
-        <h2 className="text-sm font-semibold mb-2 sm:mb-3 uppercase tracking-wider text-zinc-400">
-          Recent Alerts
-        </h2>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-          {alerts.length === 0 ? (
-            <p className="text-xs text-zinc-500">No alerts yet.</p>
-          ) : (
-            alerts.map((a) => (
-              <div
-                key={a.id}
-                className="rounded-md border border-orix-border bg-orix-bg/50 p-2 text-xs"
-              >
-                <div className="flex justify-between gap-2 text-zinc-400">
-                  <span className="uppercase truncate">{a.type}</span>
-                  <span className="shrink-0">{formatTime(a.timestamp)}</span>
+      // Stamp each candidate with the camera and timestamp
+      const stamped: FaceCandidate[] = payload.candidates.map((c) => ({
+        ...c,
+        cameraId: payload.cameraId,
+        timestamp: new Date().toISOString(),
+      }));
+      addCandidates(stamped);
+    };
+
+    socket.on("detection-result", onDetection);
+    return () => { socket.off("detection-result", onDetection); };
+  }, [socket, addCandidates]);
+
+  return (
+    <>
+      <div
+        className={`h-full grid gap-3 sm:gap-4 transition-all ${
+          pendingCount > 0
+            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]"
+            : "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]"
+        }`}
+      >
+        {/* ── Camera grid ───────────────────────────────────────── */}
+        <CameraGrid />
+
+        {/* ── Recent alerts sidebar ─────────────────────────────── */}
+        <aside className="card p-3 sm:p-4 flex flex-col min-h-0
+                           max-h-[40vh] xl:max-h-none">
+          <div className="flex items-center justify-between mb-2 sm:mb-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
+              Recent Alerts
+            </h2>
+            {pendingCount > 0 && (
+              <span className="text-[10px] bg-orange-600 text-white px-2 py-0.5
+                               rounded-full font-medium animate-pulse">
+                {pendingCount} pending
+              </span>
+            )}
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            {alerts.length === 0 ? (
+              <p className="text-xs text-zinc-500">No alerts yet.</p>
+            ) : (
+              alerts.map((a) => (
+                <div
+                  key={a.id}
+                  className="rounded-md border border-orix-border bg-orix-bg/50 p-2 text-xs"
+                >
+                  <div className="flex justify-between gap-2 text-zinc-400">
+                    <span className="uppercase truncate">{a.type}</span>
+                    <span className="shrink-0">{formatTime(a.timestamp)}</span>
+                  </div>
+                  <p className="text-white mt-1 break-words">{a.message}</p>
                 </div>
-                <p className="text-white mt-1 break-words">{a.message}</p>
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
-    </div>
+              ))
+            )}
+          </div>
+        </aside>
+      </div>
+
+      {/* ── Similarity panel (slides in from right when candidates exist) ── */}
+      <SimilarityPanel />
+    </>
   );
 }
