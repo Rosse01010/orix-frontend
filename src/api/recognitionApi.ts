@@ -76,12 +76,12 @@ export async function listEvents(
   return data;
 }
 
-/** POST /api/recognition/persons — register a new person. */
+/** POST /api/recognition/persons/enroll — register a person with browser embedding. */
 export async function registerPerson(
   payload: PersonCreatePayload
 ): Promise<PersonCreateResponse> {
   const { data } = await axios.post<PersonCreateResponse>(
-    `${RECOGNITION_BASE}/persons`,
+    `${RECOGNITION_BASE}/persons/enroll`,
     payload,
     { timeout: 10_000 }
   );
