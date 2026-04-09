@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import type { OrixSocket } from "../types/Socket";
 import type { Alert } from "../types/Alert";
 import { envString } from "../utils/helpers";
@@ -258,31 +257,5 @@ export function disconnectSocket(): void {
   }
 }
 
-/**
- * React hook that exposes the shared socket plus its connected state.
- */
-export function useSocket(): { socket: OrixSocket; connected: boolean } {
-  const socketRef = useRef<OrixSocket>(getSocket());
-  const [connected, setConnected] = useState<boolean>(
-    socketRef.current.connected
-  );
-
-  useEffect(() => {
-    const s = socketRef.current;
-    const onConnect = () => setConnected(true);
-    const onDisconnect = () => setConnected(false);
-
-    s.on("connect", onConnect);
-    s.on("disconnect", onDisconnect);
-
-    if (!s.connected) s.connect();
-
-    return () => {
-      s.off("connect", onConnect);
-      s.off("disconnect", onDisconnect);
-      // NOTE: do not disconnect on unmount — shared singleton.
-    };
-  }, []);
-
-  return { socket: socketRef.current, connected };
-}
+// Re-export the hook from its new location for backward compatibility.
+export { useSocket } from "../hooks/useSocket";

@@ -1,13 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import type { ReactNode } from "react";
-import LoginPage from "./LoginPage";
-import DashboardPage from "./DashboardPage";
-import UserManagementPage from "./UserManagementPage";
-import EnrollPersonPage from "./EnrollPersonPage";
-import AuthLayout from "../layouts/AuthLayout";
-import DashboardLayout from "../layouts/DashboardLayout";
-import { useAuthStore } from "../store/authStore";
-import type { UserRole } from "../types/User";
+import LoginPage from "./pages/LoginPage";
+import DashboardPage from "./pages/DashboardPage";
+import UserManagementPage from "./pages/UserManagementPage";
+import EnrollPersonPage from "./pages/EnrollPersonPage";
+import AuthLayout from "./layouts/AuthLayout";
+import DashboardLayout from "./layouts/DashboardLayout";
+import { useAuthStore } from "./store/authStore";
+import type { UserRole } from "./types/User";
 
 /**
  * Guards a route by requiring an authenticated user, optionally restricted
