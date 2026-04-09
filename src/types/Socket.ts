@@ -3,13 +3,7 @@ import type { CameraStatus } from "./Camera";
 import type { FaceCandidate } from "./Candidate";
 
 /**
- * Events the ORIX backend pushes to the client.
- *
- * NOTE: the current backend (FastAPI native WebSocket) only pushes
- * `face_detected` payloads, which the socket service translates into
- * `alert` events. The other channels are kept here for forward
- * compatibility and for code that still emits them (e.g. in-browser
- * face detection in CameraFeed).
+ * Events the ORIX backend pushes to the client via Socket.IO.
  */
 export interface ServerToClientEvents {
   alert: (alert: Alert) => void;
@@ -24,10 +18,6 @@ export interface ServerToClientEvents {
   disconnect: (reason: string) => void;
 }
 
-/**
- * Events the client "emits". Since the backend WebSocket is push-only,
- * these are local-only (see socketService.ts `emit`).
- */
 export interface ClientToServerEvents {
   "face-detected": (payload: { cameraId: string; count: number }) => void;
   "ack-alert": (payload: { alertId: string }) => void;
@@ -36,7 +26,21 @@ export interface ClientToServerEvents {
 }
 
 /**
+ * Confidence tier derived from ArcFace cosine similarity distributions
+ * (Deng et al., CVPR 2019 — Figure 7 angle distributions):
+ *   "high"     ≥ 0.55  → positive pairs cluster, safe to auto-identify
+ *   "moderate" 0.40–0.54 → overlap region, show candidate panel for review
+ *   "low"      < 0.40  → likely different identity or poor-quality frame
+ *
+ * VGGFace2 (Cao et al., 2018 — Table IV) shows front-to-profile similarity
+ * averages ~0.49–0.69 even for the best models, so "moderate" is expected
+ * for off-axis detections and should not be treated as a hard reject.
+ */
+export type ConfidenceTier = "high" | "moderate" | "low";
+
+/**
  * Normalized bounding box shape used for overlays.
+ * confidence_tier is set by the backend based on ArcFace similarity ranges.
  */
 export interface BoundingBox {
   x: number;
@@ -45,15 +49,12 @@ export interface BoundingBox {
   height: number;
   label?: string;
   confidence?: number;
+  /** ArcFace-derived tier: "high" | "moderate" | "low" */
+  confidence_tier?: ConfidenceTier;
   quality?: number;
   angle?: string;
 }
 
-/**
- * Minimal socket-ish interface the rest of the app relies on. The concrete
- * implementation lives in `services/socketService.ts` and wraps a native
- * `WebSocket`, but consumers only see this event-emitter surface.
- */
 export interface OrixSocket {
   id: string | null;
   connected: boolean;

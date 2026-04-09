@@ -3,21 +3,33 @@ import { toast } from "react-toastify";
 import { confirmCandidate } from "../../api/candidateApi";
 import { useCandidateStore } from "../../store/candidateStore";
 import type { FaceCandidate, CandidateMatch } from "../../types/Candidate";
+import type { ConfidenceTier } from "../../types/Socket";
 
 /**
  * SimilarityPanel
  * ───────────────
- * Slide-in panel on the right side of the dashboard.
- * Shows unidentified or off-angle faces detected by the cameras,
- * each with their top candidate matches.
- * Operators can click a candidate to confirm the identity —
- * this adds the embedding to the person's profile automatically.
+ * Slide-in panel showing faces that need operator confirmation.
+ *
+ * A face appears here when:
+ *   (a) no person exceeded the similarity threshold → is_unknown = true
+ *   (b) best match is in the 0.40–0.54 "moderate" zone → confidence_tier = "moderate"
+ *       (VGGFace2 shows this is normal for off-axis / age-gap faces)
+ *   (c) |yaw| > 30° even if recognised → off-axis false-accept guard
+ *
+ * Candidate similarity bars are color-coded per ArcFace distributions
+ * (Deng et al., CVPR 2019 — Figure 7):
+ *   ≥ 55%  → green  (positive pair cluster, high confidence)
+ *   40–54% → amber  (overlap zone, probable match)
+ *   30–39% → zinc   (border of negative distribution, weak signal)
  */
 export default function SimilarityPanel() {
   const pending = useCandidateStore((s) => s.pending);
   const remove  = useCandidateStore((s) => s.remove);
 
   if (pending.length === 0) return null;
+
+  const unknownCount   = pending.filter((f) => f.is_unknown).length;
+  const moderateCount  = pending.filter((f) => !f.is_unknown && f.confidence_tier === "moderate").length;
 
   return (
     <aside className="fixed top-0 right-0 h-full w-80 z-50 flex flex-col
@@ -28,9 +40,18 @@ export default function SimilarityPanel() {
                        border-b border-zinc-700 shrink-0">
         <div>
           <h2 className="text-sm font-semibold text-white">Similarity Panel</h2>
-          <p className="text-[10px] text-zinc-400 mt-0.5">
-            {pending.length} face{pending.length !== 1 ? "s" : ""} pending confirmation
-          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            {unknownCount > 0 && (
+              <span className="text-[10px] bg-red-900/60 text-red-300 px-1.5 py-0.5 rounded">
+                {unknownCount} unknown
+              </span>
+            )}
+            {moderateCount > 0 && (
+              <span className="text-[10px] bg-amber-900/60 text-amber-300 px-1.5 py-0.5 rounded">
+                {moderateCount} review
+              </span>
+            )}
+          </div>
         </div>
         <button
           onClick={() => useCandidateStore.getState().clear()}
@@ -68,7 +89,8 @@ function FaceCard({
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const angleLabel = formatAngle(face.yaw);
-  const isOff = Math.abs(face.yaw) > 30;
+  const isOffAxis  = Math.abs(face.yaw) > 30;
+  const tier       = face.confidence_tier ?? (face.is_unknown ? "low" : "moderate");
 
   async function handleConfirm(match: CandidateMatch) {
     if (!face.embedding) {
@@ -78,11 +100,11 @@ function FaceCard({
     setConfirming(match.person_id);
     try {
       const res = await confirmCandidate({
-        person_id: match.person_id,
-        embedding: face.embedding,
-        angle_hint: face.bbox.angle,
+        person_id:     match.person_id,
+        embedding:     face.embedding,
+        angle_hint:    face.bbox.angle,
         quality_score: 0.7,
-        camera_id: face.cameraId,
+        camera_id:     face.cameraId,
       });
       toast.success(
         `✓ ${res.name} confirmed — now has ${res.embeddings_total} embeddings.`
@@ -96,17 +118,20 @@ function FaceCard({
   }
 
   return (
-    <div className="rounded-lg border border-zinc-700 bg-zinc-800 overflow-hidden">
+    <div className={`rounded-lg border overflow-hidden ${tierBorderClass(tier)}`}>
       {/* Face info bar */}
-      <div className="px-3 py-2 flex items-center justify-between
-                       border-b border-zinc-700 bg-zinc-800/80">
+      <div className={`px-3 py-2 flex items-center justify-between
+                        border-b ${tierHeaderClass(tier)}`}>
         <div>
-          <span className="text-xs font-medium text-white">
-            {face.is_unknown ? "Unknown face" : face.bbox.name}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-white">
+              {face.is_unknown ? "Unknown face" : face.bbox.name}
+            </span>
+            <TierBadge tier={tier} />
+          </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <CamBadge cameraId={face.cameraId} />
-            <AngleBadge label={angleLabel} isOff={isOff} />
+            <AngleBadge label={angleLabel} isOff={isOffAxis} />
           </div>
         </div>
         <button
@@ -118,6 +143,16 @@ function FaceCard({
           ×
         </button>
       </div>
+
+      {/* Explanation for moderate tier */}
+      {tier === "moderate" && !face.is_unknown && (
+        <div className="px-3 py-1.5 bg-amber-950/30 border-b border-amber-900/40">
+          <p className="text-[10px] text-amber-300/80 leading-relaxed">
+            Similarity in the 0.40–0.54 overlap zone. Common for off-axis or
+            age-gap faces. Please confirm or dismiss.
+          </p>
+        </div>
+      )}
 
       {/* Candidate matches */}
       <div className="p-2 space-y-1.5">
@@ -154,10 +189,18 @@ function CandidateRow({
   onConfirm: () => void;
 }) {
   const pct = Math.round(match.similarity * 100);
-  const color =
-    pct >= 70 ? "bg-green-500" :
-    pct >= 50 ? "bg-yellow-500" :
+
+  // ArcFace similarity color scale (Deng et al., CVPR 2019 Figure 7):
+  // ≥55% → green (positive pair cluster), 40–54% → amber (overlap), <40% → zinc
+  const barColor =
+    pct >= 55 ? "bg-green-500" :
+    pct >= 40 ? "bg-amber-500" :
     "bg-zinc-500";
+
+  const tierLabel =
+    pct >= 55 ? "High" :
+    pct >= 40 ? "Moderate" :
+    "Weak";
 
   return (
     <button
@@ -175,17 +218,19 @@ function CandidateRow({
         {match.name.charAt(0).toUpperCase()}
       </div>
 
-      {/* Name + bar */}
+      {/* Name + similarity bar */}
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-white truncate">{match.name}</p>
         <div className="mt-1 flex items-center gap-2">
           <div className="flex-1 h-1.5 bg-zinc-600 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${color}`}
+              className={`h-full rounded-full transition-all ${barColor}`}
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="text-[10px] text-zinc-400 shrink-0">{pct}%</span>
+          <span className="text-[10px] text-zinc-400 shrink-0 w-16 text-right">
+            {pct}% · {tierLabel}
+          </span>
         </div>
       </div>
 
@@ -196,6 +241,39 @@ function CandidateRow({
       </div>
     </button>
   );
+}
+
+
+/* ── Tier badge ───────────────────────────────────────────────────────────── */
+
+function TierBadge({ tier }: { tier: ConfidenceTier }) {
+  if (tier === "high") return null; // No badge needed for high confidence
+  const cls =
+    tier === "moderate"
+      ? "bg-amber-900/60 text-amber-300"
+      : "bg-red-900/60 text-red-300";
+  const label = tier === "moderate" ? "Review" : "Unknown";
+  return (
+    <span className={`text-[9px] px-1.5 py-0.5 rounded ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+function tierBorderClass(tier: ConfidenceTier): string {
+  return tier === "moderate"
+    ? "border-amber-800/60 bg-zinc-800"
+    : tier === "low"
+    ? "border-red-900/60 bg-zinc-800"
+    : "border-zinc-700 bg-zinc-800";
+}
+
+function tierHeaderClass(tier: ConfidenceTier): string {
+  return tier === "moderate"
+    ? "border-amber-900/40 bg-amber-950/20"
+    : tier === "low"
+    ? "border-red-900/40 bg-red-950/10"
+    : "border-zinc-700 bg-zinc-800/80";
 }
 
 
@@ -228,8 +306,8 @@ function AngleBadge({ label, isOff }: { label: string; isOff: boolean }) {
 
 function formatAngle(yaw: number): string {
   const abs = Math.abs(yaw);
-  if (abs <= 15) return "Frontal";
-  if (abs <= 30) return yaw < 0 ? "Slight right" : "Slight left";
-  if (abs <= 60) return yaw < 0 ? "Right profile" : "Left profile";
+  if (abs <= 15)  return "Frontal";
+  if (abs <= 30)  return yaw < 0 ? "Slight right" : "Slight left";
+  if (abs <= 60)  return yaw < 0 ? "Right profile" : "Left profile";
   return yaw < 0 ? "Far right" : "Far left";
 }
